@@ -2,6 +2,8 @@ import networkx as nx
 import matplotlib.pyplot as plt
 import os
 import re
+from entidades.aluno import Aluno
+from entidades.projeto import Projeto
 
 class Grafo:
 
@@ -133,9 +135,9 @@ class Grafo:
 
         livres = self.get_alunos().copy()
 
-        # registra propostas já feitas
+        # registra índice da próxima preferência a propor
         propostas = {
-            aluno.getCodigo(): set()
+            aluno.getCodigo(): 0
             for aluno in self.alunos
         }
 
@@ -152,62 +154,77 @@ class Grafo:
             # registrar visualização da iteração
             self.registrarVisualizacao(iteracao, matches)
 
-            novos_livres = []
+            aluno = livres.pop(0)
+            prefs = aluno.getPreferenciasProjetos()
+            cod_aluno = aluno.getCodigo()
 
-            for aluno in livres:
+            # Se já propôs para todos os projetos, desiste
+            if propostas[cod_aluno] >= len(prefs):
+                continue
 
-                prefs = aluno.getPreferenciasProjetos()
-                cod_aluno = aluno.getCodigo()
+            projeto_cod = prefs[propostas[cod_aluno]]
+            propostas[cod_aluno] += 1
 
-                # percorre as preferências em ordem
-                for projeto_cod in prefs:
+            projeto = self._busca_projeto(projeto_cod)
 
-                    # se já propôs, pula
-                    if projeto_cod in propostas[cod_aluno]:
-                        continue
+            # se projeto não existe, volta para a fila e tenta próxima preferência
+            if projeto is None:
+                livres.append(aluno)
+                continue
 
-                    propostas[cod_aluno].add(projeto_cod)
-                    projeto = self._busca_projeto(projeto_cod)
+            # marca aresta como proposta (azul)
+            self._marcar_aresta(cod_aluno, projeto_cod, "proposta")
 
-                    # marca aresta como proposta (azul)
-                    self._marcar_aresta(cod_aluno, projeto_cod, "proposta")
+            # rejeitar se nota < requisito
+            if aluno.getNota() < projeto.getRequisitoNotas():
+                self._marcar_aresta(cod_aluno, projeto_cod, "rejeicao")
+                livres.append(aluno)  # volta para a fila e tenta próxima preferência
+                continue
 
-                    # rejeitar se nota < requisito
-                    if aluno.getNota() < projeto.getRequisitoNotas():
-                        self._marcar_aresta(cod_aluno, projeto_cod, "rejeicao")
-                        break
+            alocados = matches[projeto_cod]
 
-                    alocados = matches[projeto_cod]
+            # se há vaga, insere
+            if len(alocados) < projeto.getNumeroVagas():
+                alocados.append(aluno)
+                self._marcar_aresta(cod_aluno, projeto_cod, "temporario")
+            else:
+                # projeto está cheio → substituir pior aluno
+                pior = min(alocados, key=lambda a: a.getNota())
 
-                    # se há vaga, insere
-                    if len(alocados) < projeto.getNumeroVagas():
-                        alocados.append(aluno)
-                        self._marcar_aresta(cod_aluno, projeto_cod, "temporario")
-                        break
+                # se aluno atual é melhor que o pior
+                if aluno.getNota() > pior.getNota():
+                    alocados.remove(pior)
+                    alocados.append(aluno)
+                    self._marcar_aresta(cod_aluno, projeto_cod, "temporario")
+                    self._marcar_aresta(pior.getCodigo(), projeto_cod, "black")
+                    livres.append(pior)  # pior volta a propor
+                else:
+                    # rejeitado
+                    self._marcar_aresta(cod_aluno, projeto_cod, "rejeicao")
+                    livres.append(aluno)  # volta para a fila e tenta próxima preferência
 
-                    # senão, o projeto está cheio → substituir pior aluno
-                    pior = min(alocados, key=lambda a: a.getNota())
-
-                    # se aluno atual é melhor que o pior
-                    if aluno.getNota() > pior.getNota():
-                        alocados.remove(pior)
-                        alocados.append(aluno)
-
-                        novos_livres.append(pior)
-                        break
-                    else:
-                        # rejeitado
-                        self._marcar_aresta(cod_aluno, projeto_cod, "rejeicao")
-                        break
-
-            livres = novos_livres
             iteracao += 1
 
-            if iteracao > 10:
+            if iteracao > 1000:  # proteção contra loop infinito
+                print("AVISO: Limite de iterações atingido!")
                 break
+
+        # Marcar alocações finais com cor laranja
+        for projeto_cod, alocados in matches.items():
+            for aluno in alocados:
+                self._marcar_aresta(aluno.getCodigo(), projeto_cod, "final")
 
         # visualização final
         self.registrarVisualizacao(iteracao, matches)
+
+        # Imprimir resultado
+        print("\n=== EMPARELHAMENTO FINAL ===")
+        for projeto_cod, alocados in matches.items():
+            if alocados:
+                nomes_alunos = [a.getCodigo() for a in alocados]
+                print(f"{projeto_cod}: {nomes_alunos}")
+            else:
+                print(f"{projeto_cod}: (vazio)")
 
         return matches
 
@@ -233,3 +250,133 @@ class Grafo:
         }.get(status, "black")
 
         self.G[aluno_cod][projeto_cod]["cor"] = cor
+
+    # ---------------------------------------------------------
+    # IMPRIMIR INFORMAÇÕES DO GRAFO
+    # ---------------------------------------------------------
+    def imprimir(self):
+        """Imprime informações sobre os nós do grafo"""
+        print("\n=== ALUNOS ===")
+        for aluno in self.alunos:
+            print(f"Código: {aluno.getCodigo()}, Nota: {aluno.getNota()}, Preferências: {aluno.getPreferenciasProjetos()}")
+        
+        print("\n=== PROJETOS ===")
+        for projeto in self.projetos:
+            print(f"Código: {projeto.getCodigo()}, Vagas: {projeto.getNumeroVagas()}, Requisito: {projeto.getRequisitoNotas()}")
+        
+        print(f"\nTotal de nós: {self.G.number_of_nodes()}")
+        print(f"Total de arestas: {self.G.number_of_edges()}")
+
+    def imprimir_arestas(self):
+        """Imprime informações sobre as arestas do grafo"""
+        print("\n=== ARESTAS ===")
+        for u, v, data in self.G.edges(data=True):
+            peso = data.get('peso', 'N/A')
+            ordem = data.get('ordem', 'N/A')
+            cor = data.get('cor', 'black')
+            print(f"{u} -> {v} | Peso: {peso}, Ordem: {ordem}, Cor: {cor}")
+
+    def visualizar(self, titulo="Grafo de Emparelhamento", mostrar_cores=None):
+        """
+        Plota uma visualização do grafo usando matplotlib
+        
+        Args:
+            titulo: Título do gráfico
+            mostrar_cores: Lista de cores a mostrar (ex: ['green'] para só alocados)
+                          Se None, mostra todas as arestas
+                          Cores disponíveis: 'black', 'blue', 'green', 'red', 'orange'
+        """
+        if self.G.number_of_nodes() == 0:
+            print("Grafo vazio, nada para visualizar.")
+            return
+
+        plt.figure(figsize=(14, 10))
+        
+        # Separar nós por tipo
+        alunos_nodes = [n for n, d in self.G.nodes(data=True) if d.get('tipo') == 'aluno']
+        projetos_nodes = [n for n, d in self.G.nodes(data=True) if d.get('tipo') == 'projeto']
+        
+        # Criar layout bipartido
+        pos = {}
+        
+        # Posicionar alunos à esquerda
+        y_spacing_alunos = 1.0 / (len(alunos_nodes) + 1) if alunos_nodes else 1
+        for i, aluno in enumerate(alunos_nodes):
+            pos[aluno] = (0, 1 - (i + 1) * y_spacing_alunos)
+        
+        # Posicionar projetos à direita
+        y_spacing_projetos = 1.0 / (len(projetos_nodes) + 1) if projetos_nodes else 1
+        for i, projeto in enumerate(projetos_nodes):
+            pos[projeto] = (2, 1 - (i + 1) * y_spacing_projetos)
+        
+        # Desenhar nós de alunos (círculos azuis)
+        nx.draw_networkx_nodes(
+            self.G, pos,
+            nodelist=alunos_nodes,
+            node_color='lightblue',
+            node_shape='o',
+            node_size=800,
+            label='Alunos'
+        )
+        
+        # Desenhar nós de projetos (quadrados verdes)
+        nx.draw_networkx_nodes(
+            self.G, pos,
+            nodelist=projetos_nodes,
+            node_color='lightgreen',
+            node_shape='s',
+            node_size=800,
+            label='Projetos'
+        )
+        
+        # Agrupar arestas por cor
+        cores_arestas = {}
+        for u, v, data in self.G.edges(data=True):
+            cor = data.get('cor', 'black')
+            if cor not in cores_arestas:
+                cores_arestas[cor] = []
+            cores_arestas[cor].append((u, v))
+        
+        # Desenhar arestas com suas respectivas cores
+        mapa_labels_cores = {
+            'black': 'Preferência',
+            'blue': 'Proposta',
+            'green': 'Alocado',
+            'red': 'Rejeitado',
+            'orange': 'Final'
+        }
+        
+        for cor, arestas in cores_arestas.items():
+            # Se mostrar_cores foi especificado, filtra apenas as cores desejadas
+            if mostrar_cores is not None and cor not in mostrar_cores:
+                continue
+                
+            label = mapa_labels_cores.get(cor, cor)
+            nx.draw_networkx_edges(
+                self.G, pos,
+                edgelist=arestas,
+                edge_color=cor,
+                width=2,
+                alpha=0.6,
+                label=label
+            )
+        
+        # Adicionar labels dos nós
+        labels = {}
+        for node in self.G.nodes():
+            data = self.G.nodes[node]
+            if data.get('tipo') == 'aluno':
+                nota = data.get('nota', '?')
+                labels[node] = f"{node}\n(Nota: {nota})"
+            else:
+                vagas = data.get('vagas', '?')
+                req = data.get('requisito', '?')
+                labels[node] = f"{node}\n(V:{vagas}, R:{req})"
+        
+        nx.draw_networkx_labels(self.G, pos, labels, font_size=8)
+        
+        plt.title(titulo, fontsize=16, fontweight='bold')
+        plt.legend(loc='upper left', fontsize=10)
+        plt.axis('off')
+        plt.tight_layout()
+        plt.show()

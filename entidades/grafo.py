@@ -135,13 +135,11 @@ class Grafo:
 
         livres = self.get_alunos().copy()
 
-        # registra índice da próxima preferência a propor
         propostas = {
             aluno.getCodigo(): 0
             for aluno in self.alunos
         }
 
-        # lista de alocações
         matches = {
             projeto.getCodigo(): []
             for projeto in self.projetos
@@ -205,9 +203,12 @@ class Grafo:
 
             iteracao += 1
 
-            if iteracao > 1000:  # proteção contra loop infinito
+            if iteracao > 10:  # proteção contra loop infinito
                 print("AVISO: Limite de iterações atingido!")
                 break
+
+        # FASE 2: Garantir que cada projeto tenha pelo menos 1 aluno
+        self._garantir_minimo_por_projeto(matches)
 
         # Marcar alocações finais com cor laranja
         for projeto_cod, alocados in matches.items():
@@ -217,7 +218,201 @@ class Grafo:
         # visualização final
         self.registrarVisualizacao(iteracao, matches)
 
-        # Imprimir resultado
+        # Calcular e imprimir estatísticas
+        self._imprimir_estatisticas(matches)
+
+        return matches
+
+    def _garantir_minimo_por_projeto(self, matches):
+        """
+        Garante que cada projeto tenha pelo menos 1 aluno alocado.
+        Move alunos de projetos com múltiplas vagas para projetos vazios quando possível.
+        """
+        print("\n🔧 FASE 2: Garantindo mínimo de 1 aluno por projeto...")
+        
+        projetos_vazios = [p_cod for p_cod, alocs in matches.items() if len(alocs) == 0]
+        
+        if not projetos_vazios:
+            print("  ✓ Todos os projetos já têm pelo menos 1 aluno.")
+            return
+        
+        for projeto_vazio_cod in projetos_vazios:
+            projeto_vazio = self._busca_projeto(projeto_vazio_cod)
+            
+            # Buscar alunos qualificados que listaram este projeto
+            candidatos = []
+            for aluno in self.alunos:
+                if projeto_vazio_cod in aluno.getPreferenciasProjetos():
+                    if aluno.getNota() >= projeto_vazio.getRequisitoNotas():
+                        candidatos.append(aluno)
+            
+            # Ordenar candidatos por nota (melhor primeiro)
+            if candidatos:
+                candidatos.sort(key=lambda a: a.getNota(), reverse=True)
+            
+            # Tentar realocar um candidato que já está em outro projeto
+            realocado = False
+            for candidato in candidatos:
+                cod_candidato = candidato.getCodigo()
+                
+                # Verificar se o candidato já está alocado em outro projeto
+                projeto_atual = None
+                for p_cod, alocs in matches.items():
+                    if any(a.getCodigo() == cod_candidato for a in alocs):
+                        projeto_atual = p_cod
+                        break
+                
+                if projeto_atual:
+                    # Candidato já está alocado
+                    # Só realoca se o projeto atual tiver mais de 1 aluno
+                    if len(matches[projeto_atual]) > 1:
+                        # Verificar se este projeto vazio está nas preferências do candidato
+                        prefs = candidato.getPreferenciasProjetos()
+                        pos_atual = prefs.index(projeto_atual) if projeto_atual in prefs else float('inf')
+                        pos_vazio = prefs.index(projeto_vazio_cod) if projeto_vazio_cod in prefs else float('inf')
+                        
+                        # Realoca independente da preferência (obrigatório ter pelo menos 1)
+                        # Remover do projeto atual
+                        matches[projeto_atual] = [a for a in matches[projeto_atual] 
+                                                 if a.getCodigo() != cod_candidato]
+                        # Adicionar ao projeto vazio
+                        matches[projeto_vazio_cod].append(candidato)
+                        self._marcar_aresta(cod_candidato, projeto_atual, "black")
+                        self._marcar_aresta(cod_candidato, projeto_vazio_cod, "temporario")
+                        print(f"  ✓ {projeto_vazio_cod}: Realocado {cod_candidato} de {projeto_atual}")
+                        realocado = True
+                        break
+                else:
+                    # Candidato não está alocado, podemos alocar diretamente
+                    matches[projeto_vazio_cod].append(candidato)
+                    self._marcar_aresta(cod_candidato, projeto_vazio_cod, "temporario")
+                    print(f"  ✓ {projeto_vazio_cod}: Alocado {cod_candidato} (não estava alocado)")
+                    realocado = True
+                    break
+            
+            if not realocado:
+                # Última tentativa: pegar qualquer aluno não alocado que atenda requisitos
+                alunos_nao_alocados = []
+                for aluno in self.alunos:
+                    cod = aluno.getCodigo()
+                    alocado = any(cod == a.getCodigo() for alocs in matches.values() for a in alocs)
+                    if not alocado and aluno.getNota() >= projeto_vazio.getRequisitoNotas():
+                        alunos_nao_alocados.append(aluno)
+                
+                if alunos_nao_alocados:
+                    # Pegar o melhor aluno não alocado
+                    melhor = max(alunos_nao_alocados, key=lambda a: a.getNota())
+                    matches[projeto_vazio_cod].append(melhor)
+                    self._marcar_aresta(melhor.getCodigo(), projeto_vazio_cod, "temporario")
+                    print(f"  ✓ {projeto_vazio_cod}: Alocado {melhor.getCodigo()} (forçado)")
+                else:
+                    # RELAXAMENTO: Se não há candidatos qualificados, pega o melhor não alocado
+                    # mesmo que não atenda o requisito mínimo
+                    todos_nao_alocados = []
+                    for aluno in self.alunos:
+                        cod = aluno.getCodigo()
+                        alocado = any(cod == a.getCodigo() for alocs in matches.values() for a in alocs)
+                        if not alocado:
+                            todos_nao_alocados.append(aluno)
+                    
+                    if todos_nao_alocados:
+                        melhor = max(todos_nao_alocados, key=lambda a: a.getNota())
+                        matches[projeto_vazio_cod].append(melhor)
+                        self._marcar_aresta(melhor.getCodigo(), projeto_vazio_cod, "temporario")
+                        print(f"  ⚠ {projeto_vazio_cod}: Alocado {melhor.getCodigo()} (REQUISITO RELAXADO - nota {melhor.getNota()} < {projeto_vazio.getRequisitoNotas()})")
+                    else:
+                        print(f"  ✗ {projeto_vazio_cod}: Impossível alocar (sem candidatos viáveis)")
+
+    def _imprimir_estatisticas(self, matches):
+        """Imprime estatísticas detalhadas do emparelhamento"""
+        
+        # Alunos alocados
+        alunos_alocados = set()
+        for alocados in matches.values():
+            for aluno in alocados:
+                alunos_alocados.add(aluno.getCodigo())
+        
+        alunos_nao_alocados = [a for a in self.alunos if a.getCodigo() not in alunos_alocados]
+        
+        # Projetos com alocações
+        projetos_preenchidos = [p for p, alocs in matches.items() if len(alocs) > 0]
+        projetos_vazios = [p for p, alocs in matches.items() if len(alocs) == 0]
+        
+        # Total de vagas disponíveis e ocupadas
+        total_vagas = sum(p.getNumeroVagas() for p in self.projetos)
+        vagas_ocupadas = sum(len(alocs) for alocs in matches.values())
+        
+        # Análise de projetos vazios
+        print("\n" + "="*60)
+        print("ESTATÍSTICAS DO EMPARELHAMENTO")
+        print("="*60)
+        
+        print(f"\n📊 RESUMO GERAL:")
+        print(f"  • Total de alunos: {len(self.alunos)}")
+        print(f"  • Alunos alocados: {len(alunos_alocados)} ({len(alunos_alocados)/len(self.alunos)*100:.1f}%)")
+        print(f"  • Alunos não alocados: {len(alunos_nao_alocados)} ({len(alunos_nao_alocados)/len(self.alunos)*100:.1f}%)")
+        
+        print(f"\n  • Total de projetos: {len(self.projetos)}")
+        print(f"  • Projetos preenchidos: {len(projetos_preenchidos)} ({len(projetos_preenchidos)/len(self.projetos)*100:.1f}%)")
+        print(f"  • Projetos vazios: {len(projetos_vazios)} ({len(projetos_vazios)/len(self.projetos)*100:.1f}%)")
+        
+        print(f"\n  • Total de vagas: {total_vagas}")
+        print(f"  • Vagas ocupadas: {vagas_ocupadas} ({vagas_ocupadas/total_vagas*100:.1f}%)")
+        print(f"  • Vagas disponíveis: {total_vagas - vagas_ocupadas}")
+        
+        # Análise de alunos não alocados
+        if alunos_nao_alocados:
+            print(f"\n❌ ALUNOS NÃO ALOCADOS ({len(alunos_nao_alocados)}):")
+            for aluno in alunos_nao_alocados[:10]:  # mostra até 10
+                prefs = aluno.getPreferenciasProjetos()
+                nota = aluno.getNota()
+                print(f"  • {aluno.getCodigo()} (Nota: {nota}) - Preferências: {prefs[:3]}...")
+            if len(alunos_nao_alocados) > 10:
+                print(f"  ... e mais {len(alunos_nao_alocados) - 10} alunos")
+        
+        # Análise de projetos vazios
+        if projetos_vazios:
+            print(f"\n📭 PROJETOS VAZIOS ({len(projetos_vazios)}):")
+            for proj_cod in projetos_vazios[:10]:  # mostra até 10
+                projeto = self._busca_projeto(proj_cod)
+                # Contar quantos alunos tinham interesse
+                interessados = sum(1 for a in self.alunos if proj_cod in a.getPreferenciasProjetos())
+                qualificados = sum(1 for a in self.alunos 
+                                 if proj_cod in a.getPreferenciasProjetos() 
+                                 and a.getNota() >= projeto.getRequisitoNotas())
+                
+                print(f"  • {proj_cod} (Vagas: {projeto.getNumeroVagas()}, Req: {projeto.getRequisitoNotas()}) - "
+                      f"Interessados: {interessados}, Qualificados: {qualificados}")
+            if len(projetos_vazios) > 10:
+                print(f"  ... e mais {len(projetos_vazios) - 10} projetos")
+        
+        # Distribuição de preferências
+        print(f"\n🎯 QUALIDADE DAS ALOCAÇÕES:")
+        preferencias_atendidas = {1: 0, 2: 0, 3: 0, '4+': 0}
+        for aluno in self.alunos:
+            if aluno.getCodigo() in alunos_alocados:
+                # Encontrar qual projeto o aluno foi alocado
+                for proj_cod, alocs in matches.items():
+                    if any(a.getCodigo() == aluno.getCodigo() for a in alocs):
+                        prefs = aluno.getPreferenciasProjetos()
+                        if proj_cod in prefs:
+                            pos = prefs.index(proj_cod) + 1
+                            if pos <= 3:
+                                preferencias_atendidas[pos] += 1
+                            else:
+                                preferencias_atendidas['4+'] += 1
+                        break
+        
+        total_alocados = len(alunos_alocados)
+        if total_alocados > 0:
+            print(f"  • 1ª escolha: {preferencias_atendidas[1]} ({preferencias_atendidas[1]/total_alocados*100:.1f}%)")
+            print(f"  • 2ª escolha: {preferencias_atendidas[2]} ({preferencias_atendidas[2]/total_alocados*100:.1f}%)")
+            print(f"  • 3ª escolha: {preferencias_atendidas[3]} ({preferencias_atendidas[3]/total_alocados*100:.1f}%)")
+            print(f"  • 4ª+ escolha: {preferencias_atendidas['4+']} ({preferencias_atendidas['4+']/total_alocados*100:.1f}%)")
+        
+        print("\n" + "="*60)
+        
+        # Imprimir resultado por projeto
         print("\n=== EMPARELHAMENTO FINAL ===")
         for projeto_cod, alocados in matches.items():
             if alocados:
@@ -239,8 +434,9 @@ class Grafo:
     # ---------------------------------------------------------
     def _marcar_aresta(self, aluno_cod, projeto_cod, status):
 
+        # Se a aresta não existe, cria ela
         if not self.G.has_edge(aluno_cod, projeto_cod):
-            return
+            self.G.add_edge(aluno_cod, projeto_cod, peso=0, ordem=0, cor="black")
 
         cor = {
             "proposta": "blue",

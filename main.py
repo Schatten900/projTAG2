@@ -7,11 +7,11 @@ def main():
     grafo.imprimir_arestas()
     
     grafo.emparelhar()
-    
+
     # Visualizar alocação final (arestas laranja)
-    grafo.visualizar("Alocação Final", mostrar_cores=['orange'])
+    grafo.visualizar("Emparelhamento final", mostrar_cores=['orange'])
     
-    # Ou para ver tudo, use:
+    # para ver tudo:
     # grafo.visualizar("Grafo Completo")
 
 if __name__ == "__main__":

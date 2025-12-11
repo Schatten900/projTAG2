@@ -362,7 +362,7 @@ class Grafo:
         
         # Análise de alunos não alocados
         if alunos_nao_alocados:
-            print(f"\n❌ ALUNOS NÃO ALOCADOS ({len(alunos_nao_alocados)}):")
+            print(f"\nALUNOS NÃO ALOCADOS ({len(alunos_nao_alocados)}):")
             for aluno in alunos_nao_alocados[:10]:  # mostra até 10
                 prefs = aluno.getPreferenciasProjetos()
                 nota = aluno.getNota()
@@ -372,7 +372,7 @@ class Grafo:
         
         # Análise de projetos vazios
         if projetos_vazios:
-            print(f"\n📭 PROJETOS VAZIOS ({len(projetos_vazios)}):")
+            print(f"\nPROJETOS VAZIOS ({len(projetos_vazios)}):")
             for proj_cod in projetos_vazios[:10]:  # mostra até 10
                 projeto = self._busca_projeto(proj_cod)
                 # Contar quantos alunos tinham interesse
@@ -387,7 +387,7 @@ class Grafo:
                 print(f"  ... e mais {len(projetos_vazios) - 10} projetos")
         
         # Distribuição de preferências
-        print(f"\n🎯 QUALIDADE DAS ALOCAÇÕES:")
+        print(f"\nQUALIDADE DAS ALOCAÇÕES:")
         preferencias_atendidas = {1: 0, 2: 0, 3: 0, '4+': 0}
         for aluno in self.alunos:
             if aluno.getCodigo() in alunos_alocados:
@@ -427,7 +427,90 @@ class Grafo:
     # GERAR VISUALIZAÇÕES
     # ---------------------------------------------------------
     def registrarVisualizacao(self, iteracao, matches):
-        pass
+        """Salva visualizações do estado do grafo em cada iteração"""
+        if iteracao not in [1, 3, 5, 7, 10]:  # Só salva em iterações específicas
+            return
+            
+        import os
+        if not os.path.exists("visualizacoes"):
+            os.makedirs("visualizacoes")
+        
+        # Criar 4 visualizações separadas
+        cores_grupos = {
+            'propostas': (['blue'], 'Propostas (Azul)'),
+            'rejeicoes': (['red'], 'Rejeições (Vermelho)'),
+            'temporarios': (['green'], 'Alocações Temporárias (Verde)'),
+            'todas': (['blue', 'green', 'red'], 'Estado Completo')
+        }
+        
+        for nome, (cores, titulo) in cores_grupos.items():
+            self._salvar_visualizacao_cores(iteracao, cores, f"{titulo} - Iteração {iteracao}", 
+                                           f"visualizacoes/iter{iteracao:02d}_{nome}.png")
+    
+    def _salvar_visualizacao_cores(self, iteracao, mostrar_cores, titulo, arquivo):
+        """Salva uma visualização mostrando apenas cores específicas"""
+        fig = plt.figure(figsize=(16, 12))
+        
+        # Separar nós por tipo
+        alunos_nodes = [n for n, d in self.G.nodes(data=True) if d.get('tipo') == 'aluno']
+        projetos_nodes = [n for n, d in self.G.nodes(data=True) if d.get('tipo') == 'projeto']
+        
+        # Criar layout bipartido
+        pos = {}
+        y_spacing_alunos = 1.0 / (len(alunos_nodes) + 1) if alunos_nodes else 1
+        for i, aluno in enumerate(alunos_nodes):
+            pos[aluno] = (0, 1 - (i + 1) * y_spacing_alunos)
+        
+        y_spacing_projetos = 1.0 / (len(projetos_nodes) + 1) if projetos_nodes else 1
+        for i, projeto in enumerate(projetos_nodes):
+            pos[projeto] = (2, 1 - (i + 1) * y_spacing_projetos)
+        
+        # Desenhar nós
+        nx.draw_networkx_nodes(self.G, pos, nodelist=alunos_nodes,
+                              node_color='lightblue', node_shape='o', 
+                              node_size=600, label='Alunos')
+        nx.draw_networkx_nodes(self.G, pos, nodelist=projetos_nodes,
+                              node_color='lightgreen', node_shape='s', 
+                              node_size=600, label='Projetos')
+        
+        # Agrupar e desenhar arestas por cor
+        cores_arestas = {}
+        for u, v, data in self.G.edges(data=True):
+            cor = data.get('cor', 'black')
+            if cor not in cores_arestas:
+                cores_arestas[cor] = []
+            cores_arestas[cor].append((u, v))
+        
+        mapa_labels = {
+            'black': 'Preferência',
+            'blue': 'Proposta',
+            'green': 'Temporário',
+            'red': 'Rejeitado',
+            'orange': 'Final'
+        }
+        
+        contador = {}
+        for cor, arestas in cores_arestas.items():
+            if cor in mostrar_cores:
+                contador[cor] = len(arestas)
+                label = f"{mapa_labels.get(cor, cor)} ({len(arestas)})"
+                nx.draw_networkx_edges(self.G, pos, edgelist=arestas,
+                                      edge_color=cor, width=3, alpha=0.7, label=label)
+        
+        # Labels dos nós (só código)
+        labels = {node: node for node in self.G.nodes()}
+        nx.draw_networkx_labels(self.G, pos, labels, font_size=7)
+        
+        # Título e informações
+        info_cores = " | ".join([f"{mapa_labels.get(c, c)}: {contador.get(c, 0)}" 
+                                 for c in mostrar_cores if c in contador])
+        plt.title(f"{titulo}\n{info_cores}", fontsize=14, fontweight='bold')
+        plt.legend(loc='upper left', fontsize=10)
+        plt.axis('off')
+        plt.tight_layout()
+        plt.savefig(arquivo, dpi=150, bbox_inches='tight')
+        plt.close(fig)
+        print(f"  -> Salva: {arquivo}")
 
     # ---------------------------------------------------------
     # MARCAR CORES NAS ARESTAS
